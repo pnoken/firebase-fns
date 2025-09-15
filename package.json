@@ -1,0 +1,28 @@
+{
+  "name": "fiatsend-appwrite-functions",
+  "version": "1.0.0",
+  "description": "Appwrite functions for Fiatsend to handle long-running operations",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Run individual function tests\" && exit 0",
+    "install-all": "cd validate-mobile && npm install && cd ../mint-identity && npm install"
+  },
+  "keywords": [
+    "appwrite",
+    "functions",
+    "fiatsend",
+    "mobile-validation",
+    "blockchain",
+    "nft"
+  ],
+  "author": "Fiatsend Team",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/your-username/fiatsend-appwrite-functions.git"
+  },
+  "bugs": {
+    "url": "https://github.com/your-username/fiatsend-appwrite-functions/issues"
+  },
+  "homepage": "https://github.com/your-username/fiatsend-appwrite-functions#readme"
+}
