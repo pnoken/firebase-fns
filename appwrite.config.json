@@ -1,0 +1,45 @@
+{
+    "projectId": "67734cdb001afde00645",
+    "functions": [
+        {
+            "$id": "68c7d3870008654116ca",
+            "name": "validate-mobile",
+            "runtime": "node-18.0",
+            "specification": "s-0.5vcpu-512mb",
+            "execute": [
+                "any"
+            ],
+            "events": [],
+            "scopes": [
+                "users.read"
+            ],
+            "schedule": "",
+            "timeout": 15,
+            "enabled": true,
+            "logging": true,
+            "entrypoint": "src/main.js",
+            "commands": "npm install",
+            "path": "functions/validate-mobile"
+        },
+        {
+            "$id": "68c7d3f10039dfcefd18",
+            "name": "mint-identity",
+            "runtime": "node-18.0",
+            "specification": "s-0.5vcpu-512mb",
+            "execute": [
+                "any"
+            ],
+            "events": [],
+            "scopes": [
+                "users.read"
+            ],
+            "schedule": "",
+            "timeout": 15,
+            "enabled": true,
+            "logging": true,
+            "entrypoint": "src/main.js",
+            "commands": "npm install",
+            "path": "functions/mint-identity"
+        }
+    ]
+}

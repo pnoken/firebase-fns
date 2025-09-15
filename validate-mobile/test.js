@@ -3,8 +3,8 @@
 
 const fetch = require('node-fetch');
 
-const APPWRITE_FUNCTION_URL = 'https://cloud.appwrite.io/v1/functions/YOUR_FUNCTION_ID/executions';
-const APPWRITE_PROJECT_ID = 'YOUR_PROJECT_ID';
+const APPWRITE_FUNCTION_URL = 'https://cloud.appwrite.io/v1/functions/68c7d3870008654116ca/executions';
+const APPWRITE_PROJECT_ID = '67734cdb001afde00645';
 
 async function testValidation() {
   console.log('🧪 Testing Appwrite Function...\n');
