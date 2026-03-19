@@ -1,0 +1,8 @@
+{
+  "projects": {
+    "default": "fiatsend-interface",
+    "prod": "fiatsend-interface"
+  },
+  "targets": {},
+  "etags": {}
+}

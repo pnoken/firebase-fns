@@ -14,6 +14,14 @@ This repository contains Appwrite functions to handle long-running operations th
 - **Timeout**: 15 minutes (vs Vercel's 5 seconds)
 - **Features**: Signature verification, Appwrite DB integration
 
+### 3. moolre-callback (USSD + Payment Webhook)
+- **Purpose**: Receives Moolre USSD callbacks and payment webhooks, records deposits, and mints GHSFIAT to the user wallet.
+- **Why**: Provider callbacks are more reliable outside the Next.js/Vercel app domain (avoids 429/WAF issues).
+- **Behavior**:
+  - USSD payloads (`sessionId/msisdn/...`) → returns `{ message, reply }` for the USSD session
+  - Payment webhook payloads (`data.txstatus/...`) → verifies `data.secret`, writes `deposits/*`, submits mint tx, returns 200 quickly
+- **Collections used**: `users`, `deposits`, `ussd_sessions`
+
 ## Quick Start
 
 ### Prerequisites
@@ -86,13 +94,28 @@ This repository contains Appwrite functions to handle long-running operations th
 - `APPWRITE_PROJECT_ID` - Your Appwrite project ID
 - `APPWRITE_API_KEY` - Your Appwrite API key
 
+### moolre-callback function:
+- `MOOLRE_API_USER` - Your Moolre API user
+- `MOOLRE_PUBLIC_KEY` - Your Moolre public key (used with `X-API-PUBKEY`)
+- `MOOLRE_ACCOUNT_NUMBER` - Your Moolre wallet account number
+- `MOOLRE_WEBHOOK_SECRET` - Must match incoming webhook payload `data.secret`
+- `RPC_URL` - Chain RPC used for minting
+- `MINTER_PRIVATE_KEY` - Private key allowed to mint GHSFIAT
+- `GHSFIAT_CONTRACT_ADDRESS` - (Optional) overrides default token address
+- `VONAGE_API_KEY` - Vonage API key for SMS (optional)
+- `VONAGE_API_SECRET` - Vonage API secret for SMS (optional)
+- `VONAGE_SMS_FROM` - Sender name/number (optional; default "Fiatsend")
+
 ## API Endpoints
 
 ### validate-mobile
-```
-POST /executions
-Content-Type: application/json
+This is a **public HTTPS endpoint** (Firebase HTTPS function). After deploy, Firebase gives you:
 
+- `https://us-central1-<your-project-id>.cloudfunctions.net/validateMobile`
+
+Request:
+
+```json
 {
   "receiver": "0550937111",
   "channel": 6
@@ -101,6 +124,13 @@ Content-Type: application/json
 
 ### mint-identity
 ```
+
+### moolre-callback
+This is a **public HTTPS endpoint** (not Appwrite executions). After deploy, Firebase gives you:
+
+- `https://us-central1-<your-project-id>.cloudfunctions.net/moolreCallback`
+
+Paste that into Moolre’s **Callback URL** field.
 POST /executions
 Content-Type: application/json
 
