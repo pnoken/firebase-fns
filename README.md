@@ -2,6 +2,10 @@
 
 This repository contains Appwrite functions to handle long-running operations that exceed Vercel's 5-second timeout limit.
 
+firebase functions:secrets:set FIATSEND_MAIN_URL
+firebase functions:secrets:set FIATSEND_INTERNAL_SERVICE_SECRET
+cd functions && npm run build && cd .. && firebase deploy --only functions:nonCustodialDepositIndexer,functions:runNonCustodialDepositIndexerNow
+
 ## Functions
 
 ### 1. validate-mobile
@@ -21,6 +25,44 @@ This repository contains Appwrite functions to handle long-running operations th
   - USSD payloads (`sessionId/msisdn/...`) → returns `{ message, reply }` for the USSD session
   - Payment webhook payloads (`data.txstatus/...`) → verifies `data.secret`, writes `deposits/*`, submits mint tx, returns 200 quickly
 - **Collections used**: `users`, `deposits`, `ussd_sessions`
+
+## Non-custodial stablecoin deposit indexer (Polygon / BSC)
+
+Indexed deposits use Firestore collections documented in `functions/migrations/001_deposit_indexer.firestore.json`:
+
+- `wallets` — maps `userId` → `publicAddress` / `publicAddressLower` (register via fiatsend-admin **Deposit indexer** or `POST /api/internal/service/non-custodial-wallets/upsert` on main).
+- `deposit_ledger` — one doc per transfer log (`pending` until confirmed, then `confirmed` after ledger credit).
+- `sync_state` — `lastScannedBlock` per chain (`polygon`, `bsc`).
+
+The worker loads ERC-20 **Transfer** logs for USDT/USDC, resolves recipients in bulk against `wallets`, inserts idempotent `deposit_ledger` rows, and advances `sync_state` in small chunks (**10 blocks** per `eth_getLogs` by default so providers like **Alchemy Free** stay within their log-range cap). After **12** confirmations it calls fiatsend-main `POST /api/internal/service/deposit-indexer/credit-ledger` (Bearer `INTERNAL_SERVICE_SECRET`) to credit `custodial_stablecoin_ledger`. On PAYG or permissive RPCs you can raise `SCAN_CHUNK_BLOCKS` / `MAX_CHUNKS_PER_RUN` in `functions/src/depositIndexer/constants.ts`.
+
+### Deployed functions
+
+| Export | Type | Purpose |
+|--------|------|---------|
+| `nonCustodialDepositIndexer` | `onSchedule` every 2 minutes | Catch-up scan + confirm/credit cycle |
+| `runNonCustodialDepositIndexerNow` | HTTPS (`onRequest`) | Manual run; `Authorization: Bearer <FIATSEND_INTERNAL_SERVICE_SECRET>` |
+
+### Required secrets (Firebase)
+
+```bash
+firebase functions:secrets:set FIATSEND_MAIN_URL
+# Must match fiatsend-main INTERNAL_SERVICE_SECRET (or legacy ADMIN_API_SECRET)
+firebase functions:secrets:set FIATSEND_INTERNAL_SERVICE_SECRET
+# Optional; defaults to public RPCs if unset
+firebase functions:secrets:set POLYGON_RPC_URL
+firebase functions:secrets:set BSC_RPC_URL
+```
+
+```bash
+cd functions && npm run build && cd .. && firebase deploy --only functions:nonCustodialDepositIndexer,functions:runNonCustodialDepositIndexerNow
+```
+
+### Custodial deposit scan (still on fiatsend-main)
+
+**Custodial** Polygon/BSC scanning (all `custodial_wallets`, sweep/mint, etc.) remains in `fiatsend-main` (`/api/cron/scan-deposits`). Schedule it with **Vercel cron** or another job runner; it is no longer triggered from this repo.
+
+---
 
 ## Quick Start
 

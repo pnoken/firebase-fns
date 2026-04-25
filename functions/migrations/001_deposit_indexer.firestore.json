@@ -1,0 +1,39 @@
+{
+  "description": "Logical schema for non-custodial deposit indexer (fiatsend-functions). Apply in Firebase console or via your IaC; Firestore has no SQL migrations.",
+  "collections": {
+    "wallets": {
+      "documentId": "<userId>",
+      "fields": {
+        "userId": "string",
+        "publicAddress": "string (checksummed)",
+        "publicAddressLower": "string",
+        "updatedAt": "timestamp"
+      }
+    },
+    "deposit_ledger": {
+      "documentId": "<chainKey>_<txHash>_<logIndex>",
+      "fields": {
+        "txHash": "string",
+        "logIndex": "number",
+        "userId": "string",
+        "amount": "string (decimal)",
+        "tokenSymbol": "USDT | USDC",
+        "blockNumber": "number",
+        "chainKey": "polygon | bsc",
+        "chainId": "number",
+        "status": "pending | confirmed",
+        "toAddress": "string (lowercase)",
+        "createdAt": "timestamp",
+        "confirmedAt": "timestamp (optional)"
+      }
+    },
+    "sync_state": {
+      "documentId": "polygon | bsc",
+      "fields": {
+        "chainKey": "string",
+        "lastScannedBlock": "number",
+        "updatedAt": "timestamp"
+      }
+    }
+  }
+}

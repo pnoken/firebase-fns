@@ -37,15 +37,20 @@ async function findUserByVendorData(vendorData: unknown): Promise<{ userId: stri
     const raw = String(vendorData ?? "").trim();
     if (!raw) return null;
 
-    // If vendor_data is a userId/wallet doc id, attempt direct match first.
-    const directRef = db.collection("users").doc(raw.toLowerCase());
-    try {
-        const snap = await directRef.get();
-        if (snap.exists) return { userId: snap.id };
-    } catch {
-        // ignore
+    // vendor_data is session.userId (doc id) from create-didit-session. Try direct doc lookup first.
+    // Firestore doc IDs are case-sensitive; try exact match then lowercase (for wallet-address doc ids).
+    const docIdsToTry = [...new Set([raw, raw.toLowerCase()])];
+    for (const docId of docIdsToTry) {
+        if (!docId) continue;
+        try {
+            const snap = await db.collection("users").doc(docId).get();
+            if (snap.exists) return { userId: snap.id };
+        } catch {
+            // ignore
+        }
     }
 
+    // Fallback: treat vendor_data as mobileNumber (legacy / alternate config)
     const variants = normalizePhoneVariants(raw);
     if (variants.length === 0) return null;
     const snap = await db.collection("users").where("mobileNumber", "in", variants.slice(0, 10)).limit(1).get();
@@ -57,9 +62,13 @@ function isValidHexSha256(value: string): boolean {
     return /^[a-f0-9]{64}$/i.test(value);
 }
 
+function isProbablyBase64Sha256(value: string): boolean {
+    // base64(sha256) is typically 44 chars with optional '=' padding
+    return /^[A-Za-z0-9+/]{43,44}={0,2}$/.test(value);
+}
+
 function verifyDiditSignature(rawBody: string, signature: string | null, timestamp: string | null, secret: string): boolean {
     if (!signature || !timestamp || !secret) return false;
-    if (!isValidHexSha256(signature)) return false;
 
     const ts = Number(timestamp);
     if (!Number.isFinite(ts)) return false;
@@ -68,12 +77,27 @@ function verifyDiditSignature(rawBody: string, signature: string | null, timesta
     const nowSec = Math.floor(Date.now() / 1000);
     if (Math.abs(nowSec - ts) > 5 * 60) return false;
 
-    // Didit v3: HMAC_SHA256(secret, `${timestamp}.${rawBody}`) in hex
-    const payload = `${timestamp}.${rawBody}`;
-    const expected = crypto.createHmac("sha256", secret).update(payload).digest("hex");
+    const sig = signature.trim();
+
+    // Providers may sign slightly different payload formats depending on header version.
+    const payloadCandidates = [
+        `${timestamp}.${rawBody}`,
+        rawBody,
+        `${rawBody}.${timestamp}`,
+    ];
+
+    const expectedBuffers = payloadCandidates.map((p) => crypto.createHmac("sha256", secret).update(p).digest());
 
     try {
-        return crypto.timingSafeEqual(Buffer.from(expected, "hex"), Buffer.from(signature, "hex"));
+        if (isValidHexSha256(sig)) {
+            const provided = Buffer.from(sig, "hex");
+            return expectedBuffers.some((expected) => crypto.timingSafeEqual(expected, provided));
+        }
+        if (isProbablyBase64Sha256(sig)) {
+            const provided = Buffer.from(sig, "base64");
+            return expectedBuffers.some((expected) => crypto.timingSafeEqual(expected, provided));
+        }
+        return false;
     } catch {
         return false;
     }
@@ -121,10 +145,16 @@ export const diditWebhook = onRequest(
             return;
         }
 
-        // We need the raw body string for signature verification. Firebase Functions v2 keeps it at req.rawBody.
-        const rawBody = Buffer.isBuffer((req as any).rawBody)
-            ? (req as any).rawBody.toString("utf8")
-            : JSON.stringify(req.body ?? {});
+        // We need the exact raw body string for signature verification.
+        // In Firebase Functions, `req.rawBody` may be a Buffer, Uint8Array, or string depending on runtime/middleware.
+        const rawBody = (() => {
+            const rb = (req as any).rawBody as Buffer | Uint8Array | string | undefined;
+            if (typeof rb === "string") return rb;
+            if (rb && (Buffer.isBuffer(rb) || rb instanceof Uint8Array)) {
+                return Buffer.from(rb).toString("utf8");
+            }
+            return JSON.stringify(req.body ?? {});
+        })();
 
         const { signature, timestamp } = getSignatureHeader(req);
         const okSig = verifyDiditSignature(rawBody, signature, timestamp, secret);
@@ -132,6 +162,11 @@ export const diditWebhook = onRequest(
             logger.warn("Didit webhook signature invalid", {
                 hasSignature: Boolean(signature),
                 hasTimestamp: Boolean(timestamp),
+                signatureLength: signature ? String(signature).trim().length : 0,
+                signatureLooksHex: signature ? isValidHexSha256(String(signature).trim()) : false,
+                contentType: req.get("content-type") || null,
+                rawBodyLength: rawBody.length,
+                rawBodyStartsWith: rawBody.slice(0, 1),
             });
             res.status(401).json({ ok: false, error: "Invalid signature" });
             return;
@@ -154,13 +189,20 @@ export const diditWebhook = onRequest(
             return;
         }
 
+        // Map Didit status to app kycStatus format (matches Next.js didit-webhook)
+        const kycStatus = status === "Approved" ? "verified" : status === "Pending" ? "pending" : "failed";
+
         const now = admin.firestore.FieldValue.serverTimestamp();
+        const nowIso = new Date().toISOString();
         await db
             .collection("users")
             .doc(user.userId)
             .set(
                 {
-                    kycStatus: status,
+                    kycStatus,
+                    kycVerificationId: sessionId,
+                    kycVerifiedAt: kycStatus === "verified" ? nowIso : null,
+                    updatedAt: nowIso,
                     didit: {
                         status,
                         sessionId,

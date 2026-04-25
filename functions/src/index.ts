@@ -1244,3 +1244,11 @@ export const validateMobile = onRequest(
         }
     }
 );
+
+// Non-custodial Polygon/BSC USDT/USDC deposit indexer (Firestore + fiatsend-main ledger credit)
+export {
+    nonCustodialDepositIndexer,
+    runNonCustodialDepositIndexerNow,
+} from "./scheduled/nonCustodialDepositIndexer";
+
+export { convertCustodialStablecoinToGhs } from "./custodial/convertStablecoinToGhs";
