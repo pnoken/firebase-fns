@@ -6,7 +6,7 @@ export const CUSTODIAL_WALLETS_COLLECTION = "custodial_wallets";
 export const DEPOSIT_LEDGER_COLLECTION = "deposit_ledger";
 export const SYNC_STATE_COLLECTION = "sync_state";
 
-export type DepositLedgerStatus = "pending" | "confirmed";
+export type DepositLedgerStatus = "detected" | "pending" | "confirmed";
 
 export async function getLastScannedBlock(
   db: admin.firestore.Firestore,

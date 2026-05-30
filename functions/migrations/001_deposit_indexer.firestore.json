@@ -21,9 +21,12 @@
         "blockNumber": "number",
         "chainKey": "polygon | bsc",
         "chainId": "number",
-        "status": "pending | confirmed",
+        "status": "detected | pending | confirmed",
         "toAddress": "string (lowercase)",
+        "confirmations": "number (optional, updated each indexer run)",
+        "requiredConfirmations": "number (optional, 12 polygon / 3 bsc)",
         "createdAt": "timestamp",
+        "detectedAt": "timestamp (optional)",
         "confirmedAt": "timestamp (optional)"
       }
     },

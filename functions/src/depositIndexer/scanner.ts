@@ -7,13 +7,18 @@ import {
   getIndexerProvider,
 } from "./chains";
 import {
+  confirmationsFromBlock,
+  isDepositConfirmed,
+  requiredConfirmationsForChain,
+} from "./confirmations";
+import {
   ERC20_TRANSFER_TOPIC,
   INITIAL_LOOKBACK_BLOCKS,
   MAX_CHUNKS_PER_RUN,
   MIN_STABLECOIN_DEPOSIT_UNITS,
-  REQUIRED_CONFIRMATIONS_BY_CHAIN,
   SCAN_CHUNK_BLOCKS,
 } from "./constants";
+import { depositLedgerDocId } from "./ledgerDocId";
 import {
   bulkResolveUsersByRecipient,
   DEPOSIT_LEDGER_COLLECTION,
@@ -29,10 +34,6 @@ export type ScanBlocksResult = {
   newPendingDeposits: number;
   skippedExisting: number;
 };
-
-function ledgerDocId(chainKey: string, txHash: string, logIndex: number): string {
-  return `${chainKey}_${txHash.toLowerCase()}_${logIndex}`;
-}
 
 export type NonCustodialDepositIndexerOptions = {
   /** Inclusive block span for each `getLogs` query (provider-dependent; Alchemy free tier ≤ 10). */
@@ -82,6 +83,8 @@ export class NonCustodialDepositIndexer {
     const tokenMeta = new Map(
       cfg.tokens.map((t) => [t.address.toLowerCase(), t] as const)
     );
+    const latest = await provider.getBlockNumber();
+    const requiredConfirmations = requiredConfirmationsForChain(chainKey);
 
     const logs = await provider.getLogs({
       fromBlock: startBlock,
@@ -132,13 +135,29 @@ export class NonCustodialDepositIndexer {
       const userId = userByRecipient.get(r.toLower);
       if (!userId) continue;
 
-      const docId = ledgerDocId(chainKey, r.txHash, r.logIndex);
+      const docId = depositLedgerDocId(chainKey, r.txHash, r.logIndex);
       const ref = this.db.collection(DEPOSIT_LEDGER_COLLECTION).doc(docId);
+      const confirmations = confirmationsFromBlock(r.blockNumber, latest);
       try {
         const outcome = await this.db.runTransaction(async (tx) => {
           const snap = await tx.get(ref);
           if (snap.exists) {
-            return "skipped" as const;
+            const existing = snap.data() as { status?: string };
+            if (existing.status === "confirmed") {
+              return "skipped" as const;
+            }
+            tx.set(
+              ref,
+              {
+                blockNumber: r.blockNumber,
+                confirmations,
+                requiredConfirmations,
+                status: "pending" satisfies DepositLedgerStatus,
+                updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+              },
+              { merge: true }
+            );
+            return "updated" as const;
           }
           tx.set(ref, {
             txHash: r.txHash.toLowerCase(),
@@ -151,6 +170,9 @@ export class NonCustodialDepositIndexer {
             chainId: cfg.chainId,
             status: "pending" satisfies DepositLedgerStatus,
             toAddress: r.toLower,
+            confirmations,
+            requiredConfirmations,
+            detectedAt: admin.firestore.FieldValue.serverTimestamp(),
             createdAt: admin.firestore.FieldValue.serverTimestamp(),
           });
           return "created" as const;
@@ -215,7 +237,77 @@ export class NonCustodialDepositIndexer {
   }
 
   /**
-   * Promote pending deposits deep enough under the chain tip to `confirmed` and credit fiatsend-main ledger.
+   * Refresh confirmation counts for in-flight deposits (detected + pending).
+   */
+  async updateConfirmationProgressForChain(chainKey: DepositIndexerChain): Promise<{
+    updated: number;
+    latestBlock: number;
+  }> {
+    const provider = this.provider(chainKey);
+    const latest = await provider.getBlockNumber();
+    const requiredConfirmations = requiredConfirmationsForChain(chainKey);
+
+    const [detectedSnap, pendingSnap] = await Promise.all([
+      this.db
+        .collection(DEPOSIT_LEDGER_COLLECTION)
+        .where("chainKey", "==", chainKey)
+        .where("status", "==", "detected")
+        .limit(250)
+        .get(),
+      this.db
+        .collection(DEPOSIT_LEDGER_COLLECTION)
+        .where("chainKey", "==", chainKey)
+        .where("status", "==", "pending")
+        .limit(250)
+        .get(),
+    ]);
+
+    const docs = [...detectedSnap.docs, ...pendingSnap.docs];
+    let updated = 0;
+    let batch = this.db.batch();
+    let batchCount = 0;
+
+    const flush = async () => {
+      if (batchCount > 0) {
+        await batch.commit();
+        batch = this.db.batch();
+        batchCount = 0;
+      }
+    };
+
+    for (const doc of docs) {
+      const d = doc.data();
+      const blockNumber = d.blockNumber as number | undefined;
+      if (typeof blockNumber !== "number" || !Number.isFinite(blockNumber)) {
+        continue;
+      }
+      const confirmations = confirmationsFromBlock(blockNumber, latest);
+      const nextStatus: DepositLedgerStatus =
+        confirmations >= 1 ? "pending" : "detected";
+      batch.set(
+        doc.ref,
+        {
+          confirmations,
+          requiredConfirmations,
+          status: nextStatus,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+      updated += 1;
+      batchCount += 1;
+      if (batchCount >= 400) {
+        await flush();
+      }
+    }
+
+    await flush();
+
+    return { updated, latestBlock: latest };
+  }
+
+  /**
+   * Promote matured deposits to `confirmed` and credit fiatsend-main ledger.
    */
   async confirmPendingForChain(chainKey: DepositIndexerChain): Promise<{
     credited: number;
@@ -224,11 +316,8 @@ export class NonCustodialDepositIndexer {
   }> {
     const provider = this.provider(chainKey);
     const latest = await provider.getBlockNumber();
-    const requiredConfirmations = REQUIRED_CONFIRMATIONS_BY_CHAIN[chainKey];
+    const requiredConfirmations = requiredConfirmationsForChain(chainKey);
     const safeThrough = latest - requiredConfirmations;
-    if (safeThrough < 0) {
-      return { credited: 0, failed: 0, safeThroughBlock: safeThrough };
-    }
 
     const pendingSnap = await this.db
       .collection(DEPOSIT_LEDGER_COLLECTION)
@@ -243,7 +332,7 @@ export class NonCustodialDepositIndexer {
     for (const doc of pendingSnap.docs) {
       const d = doc.data();
       const blockNumber = d.blockNumber as number;
-      if (typeof blockNumber !== "number" || blockNumber > safeThrough) {
+      if (typeof blockNumber !== "number" || !isDepositConfirmed(blockNumber, latest, chainKey)) {
         continue;
       }
 
@@ -251,6 +340,7 @@ export class NonCustodialDepositIndexer {
       const amount = String(d.amount ?? "");
       const tokenSymbol = d.tokenSymbol as "USDT" | "USDC";
       const idempotencyKey = doc.id;
+      const confirmations = confirmationsFromBlock(blockNumber, latest);
 
       const credit = await this.creditDeposit({
         userId,
@@ -269,7 +359,10 @@ export class NonCustodialDepositIndexer {
       await doc.ref.set(
         {
           status: "confirmed" satisfies DepositLedgerStatus,
+          confirmations,
+          requiredConfirmations,
           confirmedAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         },
         { merge: true }
       );
@@ -283,8 +376,9 @@ export class NonCustodialDepositIndexer {
     const summary: Record<string, unknown> = {};
     for (const chainKey of ["polygon", "bsc"] as const) {
       const catchUp = await this.runCatchUpForChain(chainKey);
+      const progress = await this.updateConfirmationProgressForChain(chainKey);
       const confirm = await this.confirmPendingForChain(chainKey);
-      summary[chainKey] = { ...catchUp, confirm };
+      summary[chainKey] = { ...catchUp, progress, confirm };
     }
     return summary;
   }
